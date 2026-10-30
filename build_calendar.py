@@ -25,8 +25,7 @@ SOURCES = {
     "UFC": [f"{y} in UFC" for y in YEARS],
     "Rizin": [f"{y} in Rizin Fighting Federation" for y in YEARS],
     "Glory": [f"{y} in Glory" for y in YEARS],
-    "ARES": ["Ares Fighting Championship", "List of Ares FC events"],
-    "Octagon": ["Octagon MMA", "List of Octagon MMA events"],
+    "Oktagon": [f"{y} in Oktagon MMA" for y in YEARS],
 }
 
 
@@ -75,13 +74,18 @@ def events_from_page(promo, page):
     cutoff = date.today() - timedelta(days=1)
     for df in fetch_tables(page):
         df = flatten_columns(df)
-        cols = {c.lower(): c for c in df.columns}
-        if "event" not in cols or "date" not in cols:
+        lower = {c.lower(): c for c in df.columns}
+        event_col = lower.get("event") or next(
+            (c for l, c in lower.items() if "event" in l and l != "#"), None)
+        date_col = lower.get("date") or next(
+            (c for l, c in lower.items() if "date" in l), None)
+        if not event_col or not date_col:
             continue
-        place_cols = [cols[k] for k in ("venue", "city", "country", "location") if k in cols]
+        place_cols = [c for l, c in lower.items()
+                      if any(k in l for k in ("venue", "arena", "stadium", "city", "country", "location"))]
         for _, row in df.iterrows():
-            name = clean(row[cols["event"]])
-            day = parse_date(row[cols["date"]])
+            name = clean(row[event_col])
+            day = parse_date(row[date_col])
             if not name or not day or day < cutoff:
                 continue
             place = ", ".join(p for p in (clean(row[c]) for c in place_cols) if p)
