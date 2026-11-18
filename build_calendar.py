@@ -216,7 +216,7 @@ def parse_raf(lines):
     (Nov 28, 2026) / city (Chicago, IL). The raw HTML is mixed case; the
     site's CSS is what shows it in capitals.
     """
-    events, seen = [], set()
+    events, seen = [], {}
     for i, line in enumerate(lines):
         m = re.fullmatch(r"([A-Za-z]{3})[a-z]* (\d{1,2}), (\d{4})", line)
         if not m or m.group(1).upper() not in MONTHS or i < 2 or i + 1 >= len(lines):
@@ -230,10 +230,15 @@ def parse_raf(lines):
         name = code.upper()
         if matchup.upper() != name and re.search(r"\bvs\.?\b", matchup, re.I):
             name = f"{name}: {matchup}"
-        if name in seen:
+        # The same show also appears in the Fan Zone list as just 'RAF15':
+        # keep one entry per date, preferring the one with the matchup.
+        ev = {"promo": "RAF", "name": name, "date": day, "place": lines[i + 1]}
+        if day in seen:
+            if len(name) > len(seen[day]["name"]):
+                seen[day]["name"] = name
             continue
-        seen.add(name)
-        events.append({"promo": "RAF", "name": name, "date": day, "place": lines[i + 1]})
+        seen[day] = ev
+        events.append(ev)
     return events
 
 
