@@ -26,6 +26,7 @@ SOURCES = {
     "Rizin": [f"{y} in Rizin Fighting Federation" for y in YEARS],
     "Glory": [f"{y} in Glory" for y in YEARS],
     "Oktagon": [f"{y} in Oktagon MMA" for y in YEARS],
+    "ONE": [f"{y} in ONE Championship" for y in YEARS],
 }
 
 
@@ -204,8 +205,84 @@ def fetch_oktagon():
     return events
 
 
-OFFICIAL = {"ARES": fetch_ares, "Oktagon": fetch_oktagon}
+MONTHS = {m: i for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], 1)}
+
+
+def parse_raf(lines):
+    """Parse the 'UP NEXT' cards on realamericanfreestyle.com.
+
+    Each card renders as: code (RAF15) / matchup (CEJUDO VS SONG) / date
+    (NOV 28, 2026) / city (CHICAGO, IL).
+    """
+    events, seen = [], set()
+    for i, line in enumerate(lines):
+        m = re.fullmatch(r"([A-Z]{3}) (\d{1,2}), (\d{4})", line)
+        if not m or m.group(1) not in MONTHS or i < 2 or i + 1 >= len(lines):
+            continue
+        day = date(int(m.group(3)), MONTHS[m.group(1)], int(m.group(2)))
+        code = next((lines[j] for j in range(i - 1, max(i - 4, -1), -1)
+                     if re.fullmatch(r"RAF[\w -]*", lines[j], re.I)), None)
+        if not code or day < date.today() - timedelta(days=1):
+            continue
+        matchup = lines[i - 1]
+        name = code.upper()
+        if matchup.upper() != name and re.search(r"\bVS\.?\b", matchup, re.I):
+            name = f"{name}: {matchup.title().replace(' Vs ', ' vs ')}"
+        if name in seen:
+            continue
+        seen.add(name)
+        events.append({"promo": "RAF", "name": name, "date": day,
+                       "place": lines[i + 1].title().replace(", Ny", ", NY")
+                       .replace(", Il", ", IL").replace(", Nc", ", NC")})
+    return events
+
+
+def fetch_raf():
+    lines, _ = page_lines_and_links("https://www.realamericanfreestyle.com/")
+    return parse_raf(lines)
+
+
+def parse_one(lines):
+    """Parse the UPCOMING EVENTS list on onefc.com/events.
+
+    Each entry: title / 'NOV 20 (FRI) 11:30AM GMT' (no year) / venue.
+    """
+    noise = {"BUY TICKETS", "HOW TO WATCH", "WATCH NOW", "FINISHED", "LIVE RESULTS",
+             "BUY TICKETS VIA PIA", "UPCOMING EVENTS"}
+    start = next((i for i, l in enumerate(lines) if l.upper() == "UPCOMING EVENTS"), 0)
+    end = next((i for i, l in enumerate(lines) if l.upper() == "PAST EVENTS" and i > start), len(lines))
+    lines = lines[start:end]
+    today = date.today()
+    events, seen = [], set()
+    for i, line in enumerate(lines):
+        m = re.match(r"([A-Z]{3}) (\d{1,2}) \([A-Z]{3}\)", line)
+        if not m or m.group(1) not in MONTHS:
+            continue
+        title = next((lines[j] for j in range(i - 1, max(i - 4, -1), -1)
+                      if lines[j].upper() not in noise), None)
+        if not title:
+            continue
+        day = date(today.year, MONTHS[m.group(1)], int(m.group(2)))
+        if day < today - timedelta(days=30):  # no year shown: a date well in the past means next year
+            day = day.replace(year=today.year + 1)
+        if day < today - timedelta(days=1) or (title, day) in seen:
+            continue
+        seen.add((title, day))
+        place = lines[i + 1] if i + 1 < len(lines) and lines[i + 1].upper() not in noise \
+            and not re.match(r"[A-Z]{3} \d{1,2} \(", lines[i + 1]) else ""
+        events.append({"promo": "ONE", "name": title, "date": day, "place": place})
+    return events
+
+
+def fetch_one():
+    lines, _ = page_lines_and_links("https://www.onefc.com/events/")
+    return parse_one(lines)
+
+
+OFFICIAL = {"ARES": fetch_ares, "Oktagon": fetch_oktagon, "RAF": fetch_raf, "ONE": fetch_one}
 MIN_OFFICIAL = 3  # fewer than this and we assume the page changed; keep Wikipedia data
+MIN_BY_PROMO = {"RAF": 1}  # RAF has no Wikipedia fallback and often lists only 1-3 shows
 
 
 def main():
@@ -223,11 +300,11 @@ def main():
         except Exception as exc:  # network error, layout change, anything
             print(f"{promo} (official site): failed - {exc}")
             evs = []
-        if len(evs) >= MIN_OFFICIAL:
+        if len(evs) >= MIN_BY_PROMO.get(promo, MIN_OFFICIAL):
             all_events = [e for e in all_events if e["promo"] != promo] + evs
             print(f"{promo} (official site): using {len(evs)} events")
         else:
-            print(f"{promo} (official site): only {len(evs)} found, keeping Wikipedia data")
+            print(f"{promo} (official site): only {len(evs)} found, keeping any Wikipedia data")
     all_events.sort(key=lambda e: (e["date"], e["promo"]))
     if not all_events:
         print("No events found at all; leaving the existing file alone.")
