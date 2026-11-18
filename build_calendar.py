@@ -212,29 +212,28 @@ MONTHS = {m: i for i, m in enumerate(
 def parse_raf(lines):
     """Parse the 'UP NEXT' cards on realamericanfreestyle.com.
 
-    Each card renders as: code (RAF15) / matchup (CEJUDO VS SONG) / date
-    (NOV 28, 2026) / city (CHICAGO, IL).
+    Each card renders as: code (RAF15) / matchup (Cejudo vs Song) / date
+    (Nov 28, 2026) / city (Chicago, IL). The raw HTML is mixed case; the
+    site's CSS is what shows it in capitals.
     """
     events, seen = [], set()
     for i, line in enumerate(lines):
-        m = re.fullmatch(r"([A-Z]{3}) (\d{1,2}), (\d{4})", line)
-        if not m or m.group(1) not in MONTHS or i < 2 or i + 1 >= len(lines):
+        m = re.fullmatch(r"([A-Za-z]{3})[a-z]* (\d{1,2}), (\d{4})", line)
+        if not m or m.group(1).upper() not in MONTHS or i < 2 or i + 1 >= len(lines):
             continue
-        day = date(int(m.group(3)), MONTHS[m.group(1)], int(m.group(2)))
+        day = date(int(m.group(3)), MONTHS[m.group(1).upper()], int(m.group(2)))
         code = next((lines[j] for j in range(i - 1, max(i - 4, -1), -1)
                      if re.fullmatch(r"RAF[\w -]*", lines[j], re.I)), None)
         if not code or day < date.today() - timedelta(days=1):
             continue
         matchup = lines[i - 1]
         name = code.upper()
-        if matchup.upper() != name and re.search(r"\bVS\.?\b", matchup, re.I):
-            name = f"{name}: {matchup.title().replace(' Vs ', ' vs ')}"
+        if matchup.upper() != name and re.search(r"\bvs\.?\b", matchup, re.I):
+            name = f"{name}: {matchup}"
         if name in seen:
             continue
         seen.add(name)
-        events.append({"promo": "RAF", "name": name, "date": day,
-                       "place": lines[i + 1].title().replace(", Ny", ", NY")
-                       .replace(", Il", ", IL").replace(", Nc", ", NC")})
+        events.append({"promo": "RAF", "name": name, "date": day, "place": lines[i + 1]})
     return events
 
 
@@ -243,41 +242,25 @@ def fetch_raf():
     return parse_raf(lines)
 
 
-def parse_one(lines):
-    """Parse the UPCOMING EVENTS list on onefc.com/events.
-
-    Each entry: title / 'NOV 20 (FRI) 11:30AM GMT' (no year) / venue.
-    """
-    noise = {"BUY TICKETS", "HOW TO WATCH", "WATCH NOW", "FINISHED", "LIVE RESULTS",
-             "BUY TICKETS VIA PIA", "UPCOMING EVENTS"}
-    start = next((i for i, l in enumerate(lines) if l.upper() == "UPCOMING EVENTS"), 0)
-    end = next((i for i, l in enumerate(lines) if l.upper() == "PAST EVENTS" and i > start), len(lines))
-    lines = lines[start:end]
-    today = date.today()
+def fetch_one():
+    """ONE's events page draws its dates with JavaScript from a data-timestamp
+    attribute, so read the event cards' HTML instead of the visible text."""
+    r = requests.get("https://www.onefc.com/events/", headers=BROWSER_HEADERS, timeout=30)
+    r.raise_for_status()
+    doc = lxml.html.fromstring(r.text)
     events, seen = [], set()
-    for i, line in enumerate(lines):
-        m = re.match(r"([A-Z]{3}) (\d{1,2}) \([A-Z]{3}\)", line)
-        if not m or m.group(1) not in MONTHS:
+    for card in doc.xpath("//div[contains(concat(' ', normalize-space(@class), ' '), ' is-event ')]"):
+        title = " ".join(" ".join(card.xpath(".//h3//text()")).split())
+        stamp = card.xpath(".//*[@data-timestamp]/@data-timestamp")
+        if not title or not stamp:
             continue
-        title = next((lines[j] for j in range(i - 1, max(i - 4, -1), -1)
-                      if lines[j].upper() not in noise), None)
-        if not title:
-            continue
-        day = date(today.year, MONTHS[m.group(1)], int(m.group(2)))
-        if day < today - timedelta(days=30):  # no year shown: a date well in the past means next year
-            day = day.replace(year=today.year + 1)
-        if day < today - timedelta(days=1) or (title, day) in seen:
+        day = datetime.fromtimestamp(int(stamp[0]), timezone.utc).date()
+        if day < date.today() - timedelta(days=1) or (title, day) in seen:
             continue
         seen.add((title, day))
-        place = lines[i + 1] if i + 1 < len(lines) and lines[i + 1].upper() not in noise \
-            and not re.match(r"[A-Z]{3} \d{1,2} \(", lines[i + 1]) else ""
+        place = " ".join(" ".join(card.xpath(".//*[contains(@class,'location')]//text()")).split())
         events.append({"promo": "ONE", "name": title, "date": day, "place": place})
     return events
-
-
-def fetch_one():
-    lines, _ = page_lines_and_links("https://www.onefc.com/events/")
-    return parse_one(lines)
 
 
 OFFICIAL = {"ARES": fetch_ares, "Oktagon": fetch_oktagon, "RAF": fetch_raf, "ONE": fetch_one}
